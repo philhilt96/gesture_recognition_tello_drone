@@ -1,3 +1,5 @@
+# FPS calcualations and other calculations as needed
+
 from collections import deque
 import cv2 as cv
 

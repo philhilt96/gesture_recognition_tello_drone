@@ -1,7 +1,7 @@
+# arguments for configuration of opencv
 
 import configargparse
 
-# arguments for configuration of keyboard input and window
 def get_args():
     print('## Reading configuration ##')
     parser = configargparse.ArgParser(default_config_files=['config.txt'])

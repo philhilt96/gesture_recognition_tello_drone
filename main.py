@@ -1,15 +1,18 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+# main program to control Tello Drone with keyboard or gestures or collect data from camera
+
+from email.policy import default
+from tabnanny import check
 import cv2 as cv
 
 # from gestures.tello_gesture_controller import TelloGestureController
 from tello_control import GestureControl, KeyboardControl
 from calculations import CalculateFPS
 
-from djitellopy import Tello
-# from gestures import *
+from djitellopy import Tello as default_Tello
 from tello_control import GestureControl, KeyboardControl
 from gesture_recognition import *
+import tello as custom_Tello
+
 
 import threading
 
@@ -19,18 +22,14 @@ import args
 ESC_KEY = 27
 SPACE_KEY = 32
 
-# def select_mode(key, mode):
-#     number = -1
-#     if 48 <= key <= 57:  # 0 ~ 9
-#         number = key - 48
-#     if key == 110:  # n
-#         mode = 0
-#     if key == 107:  # k
-#         mode = 1
-#     if key == 104:  # h
-#         mode = 2
-#     return number, mode
-
+# check connection - default to dji if custom connection fails
+def check_connection():
+    try:
+        custom_Tello.connect()
+        custom_Tello.streamon()
+        return True
+    except:
+        return False
 
 def main():
     # init global vars
@@ -46,7 +45,11 @@ def main():
     is_drone_up = False
 
     # Get Input from Tello Camera
-    tello = Tello()
+    if check_connection():
+        tello = custom_Tello()
+    else:
+        tello = default_Tello()
+
     tello.connect()
     tello.streamon()
     camera = tello.get_frame_read()
@@ -71,16 +74,15 @@ def main():
 
 
     # set fps with opencv
-    cv_fps_calc = CalculateFPS(buffer_len=10)
+    fps_calc = CalculateFPS(buffer_len=10)
 
     # set defaults
     mode = 0
     number = -1
 
-    # tello.move_down(20)
-
+    # main loop for program
     while True:
-        fps = cv_fps_calc.get()
+        fps = fps_calc.get()
 
         # Process Key (ESC: end)
         key = cv.waitKey(1) & 0xff
@@ -89,25 +91,25 @@ def main():
             break
         # Take off/land with space keypress
         elif key == SPACE_KEY:
+            # only take off if drone is no already in air
             if not is_drone_up:
-                # Take-off drone
                 tello.takeoff()
                 is_drone_up = True
-
             elif is_drone_up:
-                # Land tello
                 tello.land()
                 is_drone_up = False
-        # switch to keyboard controller for up and down
+        # switch to keyboard controller mode for up and down control
         elif key == ord('k'):
             mode = 0
             KEYBOARD_NAV = True
             GESTURE_NAV = False
-            tello.send_rc_control(0, 0, 0, 0)  # Stop moving
-        # switch to geture controller
+            # halt movements
+            tello.send_rc_control(0, 0, 0, 0)
+        # switch to geture controller mode to spot gestures
         elif key == ord('g'):
             KEYBOARD_NAV = False
-        elif key == ord('n'):
+        # switch to keypoint collection mode for data training
+        elif key == ord('t'):
             mode = 1
             GESTURE_NAV = True
             KEYBOARD_NAV = True
@@ -120,19 +122,14 @@ def main():
         # Image from tello camera
         image = camera.frame
 
-        debug_image, gesture_id = gesture_detector.recognize(image, number, mode)
+        debug_image, gesture_id = gesture_detector.recognize_gesture(image, number, mode)
         gesture_buffer.add_gesture(gesture_id)
 
         # Start control thread
         threading.Thread(target=tello_control, args=(key, keyboard_controller, gesture_navigation,)).start()
-        # threading.Thread(target=tello_battery, args=(tello,)).start()
 
         debug_image = gesture_detector.draw_info(debug_image, fps, mode, number)
-        # battery_status = 1
 
-        # Battery status and image rendering
-        # cv.putText(debug_image, "Battery: {}".format(battery_status), (5, 720 - 5),
-        #            cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
         cv.imshow('Gesture Recognition', debug_image)
 

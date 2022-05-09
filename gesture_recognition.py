@@ -1,23 +1,41 @@
-# File to build detection model and gesture buffer using mediapipe hands and opencv
+# Classes to build detection model and gesture buffer/collection using mediapipe hands and opencv
 
 import csv
 import copy
 import argparse
 import itertools
-from collections import Counter
-from collections import deque
-
 import cv2 as cv
 import numpy as np
 import mediapipe as mp
-
+from collections import Counter
+from collections import deque
 from calculations import CalculateFPS
 from model import KeyPointClassifier
-# from model import PointHistoryClassifier
+
+
+# class to handle buffer of gesture id's
+class GestureBuffer:
+    # constructor with defualt length of 10 indeces
+    def __init__(self, buffer_len=10):
+        self.buffer_len = buffer_len
+        self._buffer = deque(maxlen=buffer_len)
+
+    # add a gesture id to the buffer
+    def add_gesture(self, gesture_id):
+        self._buffer.append(gesture_id)
+
+    # get a gesture id from the buffer
+    def get_gesture(self):
+        counter = Counter(self._buffer).most_common()
+        if counter[0][1] >= (self.buffer_len - 1):
+            self._buffer.clear()
+            return counter[0][0]
+        else:
+            return
 
 # class for handling and building the gesture recognition model
 class GestureRecognition:
-    # Set defualt parameters with constructor
+    # Set defualt parameters with constructor to be set from args.py
     def __init__(self, use_static_image_mode=False, min_detection_confidence=0.7, min_tracking_confidence=0.7,
                  history_length=16):
         self.use_static_image_mode = use_static_image_mode
@@ -29,7 +47,7 @@ class GestureRecognition:
         self.hands, self.keypoint_classifier, self.keypoint_classifier_labels = self.load_model()
         # self.point_history_classifier, self.point_history_classifier_labels = self.load_model()
 
-        # Finger gesture history
+        # Finger gesture history 
         self.point_history = deque(maxlen=history_length)
         self.finger_gesture_history = deque(maxlen=history_length)
 
@@ -47,47 +65,35 @@ class GestureRecognition:
         # point_history_classifier = PointHistoryClassifier()
 
         # Read label keypoints from .csv files
-        with open('model/keypoint_classifier/keypoint_classifier_label.csv',
-                  encoding='utf-8-sig') as f:
+        with open('model/keypoint_classifier/keypoint_classifier_label.csv',encoding='utf-8-sig') as f:
             keypoint_classifier_labels = csv.reader(f)
-            keypoint_classifier_labels = [
-                row[0] for row in keypoint_classifier_labels
-            ]
-        # with open(
-        #         'model/point_history_classifier/point_history_classifier_label.csv',
-        #         encoding='utf-8-sig') as f:
-        #     point_history_classifier_labels = csv.reader(f)
-        #     point_history_classifier_labels = [
-        #         row[0] for row in point_history_classifier_labels
-        #     ]
+            keypoint_classifier_labels = [row[0] for row in keypoint_classifier_labels]
         # return keypoints
         return hands, keypoint_classifier, keypoint_classifier_labels
-            #    point_history_classifier, point_history_classifier_labels
 
-    def recognize(self, image, number=-1, mode=0):
+    # method for spotting with opencv
+    def recognize_gesture(self, image, number=-1, mode=0):
+        USE_BOUNDED_RECTANGLE = True
 
-        USE_BRECT = True
-
-        # mirror image to work with opencv
+        # mirror image to get proper right/left
         image = cv.flip(image, 1)
         debug_image = copy.deepcopy(image)
 
         # gesture id for navigation output
         gesture_id = -1
 
-        # Detection implementation #############################################################
+        # Object detection - convert colorspace RGB values
         image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
 
         image.flags.writeable = False
         results = self.hands.process(image)
         image.flags.writeable = True
 
-        #  ####################################################################
         if results.multi_hand_landmarks is not None:
             for hand_landmarks, handedness in zip(results.multi_hand_landmarks,
                                                   results.multi_handedness):
                 # Bounding box calculation
-                brect = self._calc_bounding_rect(debug_image, hand_landmarks)
+                bound_box = self._calc_bounding_rect(debug_image, hand_landmarks)
                 # Landmark calculation
                 landmark_list = self._calc_landmark_list(debug_image, hand_landmarks)
 
@@ -101,9 +107,10 @@ class GestureRecognition:
                 self._logging_csv(number, mode, pre_processed_landmark_list,
                                   pre_processed_point_history_list)
 
-                # Hand sign classification
+                # Hand sign classification method
                 hand_sign_id = self.keypoint_classifier(pre_processed_landmark_list)
-                if hand_sign_id == 2:  # Point gesture
+                # append keypoint to keypoint
+                if hand_sign_id == 2:
                     self.point_history.append(landmark_list[8])
                 else:
                     self.point_history.append([0, 0])
@@ -111,21 +118,17 @@ class GestureRecognition:
                 # Finger gesture classification
                 finger_gesture_id = 0
                 point_history_len = len(pre_processed_point_history_list)
-                # if point_history_len == (self.history_length * 2):
-                #     finger_gesture_id = self.point_history_classifier(
-                #         pre_processed_point_history_list)
-
                 # Calculates the gesture IDs in the latest detection
                 self.finger_gesture_history.append(finger_gesture_id)
                 most_common_fg_id = Counter(
                     self.finger_gesture_history).most_common()
 
                 # Drawing part
-                debug_image = self._draw_bounding_rect(USE_BRECT, debug_image, brect)
+                debug_image = self._draw_bounding_rect(USE_BOUNDED_RECTANGLE, debug_image, bound_box)
                 debug_image = self._draw_landmarks(debug_image, landmark_list)
                 debug_image = self._draw_info_text(
                     debug_image,
-                    brect,
+                    bound_box,
                     handedness,
                     self.keypoint_classifier_labels[hand_sign_id],
                     self.keypoint_classifier_labels[hand_sign_id]
@@ -141,6 +144,7 @@ class GestureRecognition:
 
         return debug_image, gesture_id
 
+    # draw points history on finger tips
     def draw_point_history(self, image, point_history):
         for index, point in enumerate(point_history):
             if point[0] != 0 and point[1] != 0:
@@ -149,6 +153,7 @@ class GestureRecognition:
 
         return image
 
+    # draw info in coner of frame
     def draw_info(self, image, fps, mode, number):
         cv.putText(image, "FPS:" + str(fps), (10, 30), cv.FONT_HERSHEY_SIMPLEX,
                    1.0, (0, 0, 0), 4, cv.LINE_AA)
@@ -166,6 +171,7 @@ class GestureRecognition:
                            cv.LINE_AA)
         return image
 
+    # append to csv file
     def _logging_csv(self, number, mode, landmark_list, point_history_list):
         if mode == 0:
             pass
@@ -175,14 +181,9 @@ class GestureRecognition:
                 writer = csv.writer(f)
                 writer.writerow([number, *landmark_list])
                 print("Writing to " + csv_path)
-        # if mode == 2 and (0 <= number <= 9):
-        #     csv_path = 'model/point_history_classifier/point_history.csv'
-        #     with open(csv_path, 'a', newline="") as f:
-        #         writer = csv.writer(f)
-        #         writer.writerow([number, *point_history_list])
-        #         print("Writing to " + csv_path)
         return
 
+    # fucntion for calculating the opencv bounding rectangle
     def _calc_bounding_rect(self, image, landmarks):
         image_width, image_height = image.shape[1], image.shape[0]
 
@@ -472,42 +473,22 @@ class GestureRecognition:
                 cv.circle(image, (landmark[0], landmark[1]), 8, (0, 0, 0), 1)
         return image
 
-    def _draw_info_text(self, image, brect, handedness, hand_sign_text,
+    def _draw_info_text(self, image, bound_box, handedness, hand_sign_text,
                         finger_gesture_text):
-        cv.rectangle(image, (brect[0], brect[1]), (brect[2], brect[1] - 22),
+        cv.rectangle(image, (bound_box[0], bound_box[1]), (bound_box[2], bound_box[1] - 22),
                      (0, 0, 0), -1)
 
         info_text = handedness.classification[0].label[0:]
         if hand_sign_text != "":
             info_text = info_text + ':' + hand_sign_text
-        cv.putText(image, info_text, (brect[0] + 5, brect[1] - 4),
+        cv.putText(image, info_text, (bound_box[0] + 5, bound_box[1] - 4),
                    cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv.LINE_AA)
         return image
 
-    def _draw_bounding_rect(self, use_brect, image, brect):
+    def _draw_bounding_rect(self, use_brect, image, bound_box):
         if use_brect:
             # Outer rectangle
-            cv.rectangle(image, (brect[0], brect[1]), (brect[2], brect[3]),
+            cv.rectangle(image, (bound_box[0], bound_box[1]), (bound_box[2], bound_box[3]),
                          (0, 0, 0), 1)
 
         return image
-
-# class to handle buffer of gesture id's
-class GestureBuffer:
-    # constructor with defualt length of 10 indeces
-    def __init__(self, buffer_len=10):
-        self.buffer_len = buffer_len
-        self._buffer = deque(maxlen=buffer_len)
-
-    # add a gesture id to the buffer
-    def add_gesture(self, gesture_id):
-        self._buffer.append(gesture_id)
-
-    # get a gesture id from the buffer
-    def get_gesture(self):
-        counter = Counter(self._buffer).most_common()
-        if counter[0][1] >= (self.buffer_len - 1):
-            self._buffer.clear()
-            return counter[0][0]
-        else:
-            return
